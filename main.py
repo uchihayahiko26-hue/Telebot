@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 import threading
 import time
 
-BOT_TOKEN = os.environ.get('BOT_TOKEN', "8541411839:AAEJzUUN1mDcvgDdTmTlqy5WnveSupmdqpc")
+BOT_TOKEN = os.environ.get('BOT_TOKEN', "8657319406:AAGSMi5vZVtl9C3ipczUtTCpBI52kOCF490")
 ADMIN_CHANNEL = os.environ.get('ADMIN_CHANNEL', "-1001234567890")
 
 bot = telebot.TeleBot(BOT_TOKEN)
